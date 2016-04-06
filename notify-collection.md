@@ -38,7 +38,6 @@ public interface INotifyCollection<T>
 ```
 
 ```cs
-IReadOnlyNotifyCollection.cs
 public interface IReadOnlyNotifyCollection<out T> 
        : IReadOnlyCollection<T>, 
          INotifyCollectionChanged
@@ -46,7 +45,6 @@ public interface IReadOnlyNotifyCollection<out T>
 ```
 
 ```cs
-NotifyCollection.cs
 public class NotifyCollection<T> 
        : ObservableCollection<T>, 
          INotifyCollection<T>, 
