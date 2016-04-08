@@ -73,20 +73,25 @@ namespace reactive_document_example
                     _source = null;
                     _writer = null;
                 })
+                .ObserveOn(TaskPoolScheduler.Default)
                 .Publish();
 
+            var awaitable = _writer.LastOrDefaultAsync();
 
             _disposable = new CompositeDisposable()
             {
-                ((IConnectableObservable<byte>) _writer).Connect(),
-                ((IConnectableObservable<byte>) _source).Connect()
+                ((IConnectableObservable<byte>) _source).Connect(),
+                ((IConnectableObservable<byte>) _writer).Connect()
             };
 
-            await _writer.LastOrDefaultAsync();
+            await awaitable;
         }
 
         public IObservable<byte> Read()
         {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(Document));
+
             var streamReader = Observable
                 .Create<byte>(
                     observer =>
@@ -95,29 +100,36 @@ namespace reactive_document_example
                         var disposable = ThreadPoolScheduler.Instance.Schedule(
                             () =>
                             {
-                                var position = 0;
-                                var length = _stream.Length;
-                                var buffer = new byte[4096];
-
-                                do
+                                try
                                 {
-                                    cts.Token.ThrowIfCancellationRequested();
+                                    var position = 0;
+                                    var length = _stream.Length;
+                                    var buffer = new byte[4096];
 
-                                    var count = Math.Min(4096, (int) (length - position));
-
-                                    lock (_streamLock)
+                                    do
                                     {
-                                        _stream.Seek(position, SeekOrigin.Begin);
-                                        _stream.Read(buffer, 0, count);
-                                    }
+                                        cts.Token.ThrowIfCancellationRequested();
 
-                                    for (int i = 0; i < count; i++)
-                                        observer.OnNext(buffer[i]);
+                                        var count = Math.Min(4096, (int) (length - position));
 
-                                    position += count;
-                                } while (position < length);
+                                        lock (_streamLock)
+                                        {
+                                            _stream.Seek(position, SeekOrigin.Begin);
+                                            _stream.Read(buffer, 0, count);
+                                        }
 
-                                observer.OnCompleted();
+                                        for (int i = 0; i < count; i++)
+                                            observer.OnNext(buffer[i]);
+
+                                        position += count;
+                                    } while (position < length);
+
+                                    observer.OnCompleted();
+                                }
+                                catch (Exception error)
+                                {
+                                    observer.OnError(error);
+                                }
                             });
 
                         return new CompositeDisposable()
