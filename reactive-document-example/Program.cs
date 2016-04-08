@@ -22,7 +22,7 @@ namespace reactive_document_example
                     var result = await document.Read().ToArray();
 
                     var same = expected.Zip(result, (a, b) => a == b).All(x => x);
-                    Console.WriteLine($"await Write, await Read: {(same ? "Pass" : "Fail")}");
+                    Console.WriteLine($"{(same ? "Pass" : "Fail")}");
                 }
 
             }).Wait();

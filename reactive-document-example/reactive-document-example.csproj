@@ -67,6 +67,7 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="DocumentUnitTests.cs" />
     <Compile Include="Extensions\BufferUntilSubscribedExtension.cs" />
     <Compile Include="Document.cs" />
     <Compile Include="IDocument.cs" />
