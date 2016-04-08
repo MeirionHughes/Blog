@@ -45,7 +45,14 @@ namespace reactive_document_example
                 _stream.Dispose();
         }
 
-        public async Task Write(IObservable<byte> source)
+        /// <summary>
+        /// Write an observable sequence of bytes to the document
+        /// </summary>
+        /// <exception cref="ObjectDisposedException">Thrown if
+        /// document disposed
+        /// or when document is disposed before writing completes</exception>
+        /// <returns>Observable of written bytes that also produces an error if the document is disposed before writing completes</returns>
+        public IObservable<byte> Write(IObservable<byte> source)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(Document));
@@ -58,6 +65,7 @@ namespace reactive_document_example
                 .Publish();
 
             _writerIndex = (int) _stream.Length;
+
             _writer = _source
                 .Do(next =>
                 {
@@ -73,18 +81,23 @@ namespace reactive_document_example
                     _source = null;
                     _writer = null;
                 })
-                .ObserveOn(TaskPoolScheduler.Default)
                 .Publish();
 
-            var awaitable = _writer.LastOrDefaultAsync();
+            var awaitable = new Subject<byte>();
 
             _disposable = new CompositeDisposable()
             {
+                _writer.Subscribe(awaitable),
+                ((IConnectableObservable<byte>) _writer).Connect(),
                 ((IConnectableObservable<byte>) _source).Connect(),
-                ((IConnectableObservable<byte>) _writer).Connect()
+                Disposable.Create(() =>
+                {
+                    awaitable.OnError(new ObjectDisposedException(nameof(Document)));
+                    awaitable.Dispose();
+                })
             };
 
-            await awaitable;
+            return awaitable;
         }
 
         public IObservable<byte> Read()
@@ -138,7 +151,6 @@ namespace reactive_document_example
                             disposable
                         };
                     });
-
             return Observable.Create((IObserver<byte> observer) =>
             {
                 if (_source == null)

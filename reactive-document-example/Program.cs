@@ -18,7 +18,9 @@ namespace reactive_document_example
     {
         static void Main(string[] args)
         {
-            
+            var document = new Document(new MemoryStream());
+
+            //document.Write()
         }
     }
 }

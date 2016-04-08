@@ -18,8 +18,8 @@ namespace reactive_document_example
         /// Subscribes to the source and writes the stream to the document
         /// </summary>
         /// <param name="source">observable to subscribe to for data</param>
-        /// <returns></returns>
-        Task Write(IObservable<byte> source);
+        /// <returns>observable data that has succesfully been written</returns>
+        IObservable<byte> Write(IObservable<byte> source);
 
         /// <summary>
         /// Reads the document and joins the current writer if there is one. 
