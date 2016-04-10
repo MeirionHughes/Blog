@@ -3,171 +3,101 @@ using System.IO;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
-using System.Threading;
-using System.Threading.Tasks;
 
-namespace reactive_document_example
+
+public class Document : IDocument
 {
-    public class Document : IDocument
+    private readonly EventLoopScheduler _scheduler;
+    private Stream _stream;
+    private bool _streamKeepOpen;
+    private bool _disposed;
+    private object _streamLock;
+    private IObservable<byte> _writer;
+
+
+    public Document(Stream stream, bool streamKeepOpen = false)
     {
-        private static readonly EventLoopScheduler DocumentScheduler = new EventLoopScheduler();
+        _stream = stream;
+        _streamLock = new object();
+        _streamKeepOpen = streamKeepOpen;
+        _scheduler = new EventLoopScheduler();
+    }
 
-        private readonly Stream _stream;
-        private readonly object _streamLock;
-        private readonly bool _streamKeepAlive;
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
 
-        private IDisposable _disposable;
-        private IObservable<byte> _source;
-        private IObservable<byte> _writer;
+        if (!_streamKeepOpen)
+            _stream.Dispose();
 
-        private int _writerIndex;
-        private bool _disposed;
+        _disposed = true;
+    }
 
-        public Document(MemoryStream memoryStream, bool keepAlive = false)
-        {
-            _stream = memoryStream;
-            _streamLock = new object();
-            _streamKeepAlive = keepAlive;
-        }
-
-        public void Dispose()
-        {
-            if (_disposed)
-                return;
-
-            _disposable?.Dispose();
-            _disposable = null;
-            _disposed = true;
-
-            if (!_streamKeepAlive)
-                _stream.Dispose();
-        }
-
-        /// <summary>
-        /// Write an observable sequence of bytes to the document
-        /// </summary>
-        /// <exception cref="ObjectDisposedException">Thrown if
-        /// document disposed
-        /// or when document is disposed before writing completes</exception>
-        /// <returns>Observable of written bytes that also produces an error if the document is disposed before writing completes</returns>
-        public IObservable<byte> Write(IObservable<byte> source)
-        {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(Document));
-            if (_writer != null)
-                throw new InvalidOperationException("already writing to document");
-
-            _source = source
-                .ObserveOn(DocumentScheduler)
-                .SubscribeOn(DocumentScheduler)
-                .Publish();
-
-            _writerIndex = (int) _stream.Length;
-
-            _writer = _source
-                .Do(next =>
-                {
-                    lock (_streamLock)
-                    {
-                        _stream.Seek(_writerIndex, SeekOrigin.Begin);
-                        _stream.WriteByte(next);
-                        _writerIndex += 1;
-                    }
-                })
-                .Finally(() =>
-                {
-                    _source = null;
-                    _writer = null;
-                })
-                .Publish();
-
-            var awaitable = new Subject<byte>();
-
-            _disposable = new CompositeDisposable()
+    public IObservable<byte> Write(IObservable<byte> source)
+    {
+        var writerPosition = 0;
+        var writerConnectable = source
+            .ObserveOn(_scheduler)
+            .Do((next) =>
             {
-                _writer.Subscribe(awaitable),
-                ((IConnectableObservable<byte>) _writer).Connect(),
-                ((IConnectableObservable<byte>) _source).Connect(),
-                Disposable.Create(() =>
+                lock (_streamLock)
                 {
-                    awaitable.OnError(new ObjectDisposedException(nameof(Document)));
-                    awaitable.Dispose();
-                })
-            };
+                    _stream.Seek(writerPosition++, SeekOrigin.Begin);
+                    _stream.WriteByte(next);
+                }
+            })
+            .Publish();
 
-            return awaitable;
-        }
+        _writer = writerConnectable
+            .ObserveOn(_scheduler)
+            .SubscribeOn(_scheduler);
 
-        public IObservable<byte> Read()
-        {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(Document));
+        writerConnectable.Connect();
 
-            var streamReader = Observable
-                .Create<byte>(
-                    observer =>
+        return _writer;
+    }
+
+    public IObservable<byte> Read()
+    {
+        var length = (int) _stream.Position;
+
+        var readerStream = Observable
+                .Create((IObserver<byte> observer) =>
+                {
+                    var buffer = new byte[1024];
+                    var position = 0;
+                    do
                     {
-                        var cts = new CancellationTokenSource();
-                        var disposable = ThreadPoolScheduler.Instance.Schedule(
-                            () =>
-                            {
-                                try
-                                {
-                                    var position = 0;
-                                    var length = _stream.Length;
-                                    var buffer = new byte[4096];
-
-                                    do
-                                    {
-                                        cts.Token.ThrowIfCancellationRequested();
-
-                                        var count = Math.Min(4096, (int) (length - position));
-
-                                        lock (_streamLock)
-                                        {
-                                            _stream.Seek(position, SeekOrigin.Begin);
-                                            _stream.Read(buffer, 0, count);
-                                        }
-
-                                        for (int i = 0; i < count; i++)
-                                            observer.OnNext(buffer[i]);
-
-                                        position += count;
-                                    } while (position < length);
-
-                                    observer.OnCompleted();
-                                }
-                                catch (Exception error)
-                                {
-                                    observer.OnError(error);
-                                }
-                            });
-
-                        return new CompositeDisposable()
+                        var count = Math.Min(buffer.Length, length - position);
+                        lock (_streamLock)
                         {
-                            Disposable.Create(() => cts.Dispose()),
-                            disposable
-                        };
-                    });
-            return Observable.Create((IObserver<byte> observer) =>
+                            _stream.Seek(position, SeekOrigin.Begin);
+                            _stream.Read(buffer, 0, count);
+                            foreach (var item in buffer)
+                            {
+                                observer.OnNext(item);
+                            }
+                        }
+                    }while (position < length);
+
+                    observer.OnCompleted();
+
+                    return () => { };
+                });
+
+
+
+        var writerConnectable = source
+            .ObserveOn(_scheduler)
+            .Do((next) =>
             {
-                if (_source == null)
-                    return streamReader.Subscribe(observer);
-
-                var bufferedSource = _source.BufferUntilSubscribed();
-                var bufferedSourceDispose = bufferedSource.Connect();
-
-                var disposable = new CompositeDisposable()
+                lock (_streamLock)
                 {
-                    streamReader
-                        .Concat(bufferedSource)
-                        .Subscribe(observer),
-                    bufferedSourceDispose
-                };
-                return disposable;
-            }).SubscribeOn(DocumentScheduler);
-        }
+                    _stream.Seek(writerPosition++, SeekOrigin.Begin);
+                    _stream.WriteByte(next);
+                }
+            })
+            .Publish();
     }
 }

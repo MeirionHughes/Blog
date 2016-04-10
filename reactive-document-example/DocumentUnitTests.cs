@@ -3,11 +3,12 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
 
-namespace reactive_document_example
-{
+namespace blah
+{ 
     [TestFixture]
     public class DocumentUnitTests
     {
@@ -65,11 +66,13 @@ namespace reactive_document_example
 
             using (var stream = new MemoryStream())
             {
-
-                using (var document = new Document(stream, true))
+                Assert.ThrowsAsync<ObjectDisposedException>(async () =>
                 {
-                    document.Write(hotSource).Subscribe();
-                }
+                    using (var document = new Document(stream, true))
+                    {
+                        document.Write(hotSource).Subscribe();
+                    }
+                });
 
                 Assert.That(stream.Length, Is.Not.EqualTo(notexpected));
             }
@@ -110,11 +113,11 @@ namespace reactive_document_example
                 {
                     await document.Write(_source);
                 }
-                
+
                 var result = new byte[stream.Length];
                 stream.Seek(0, SeekOrigin.Begin);
                 stream.Read(result, 0, result.Length);
-                    
+
                 CollectionAssert.AreEqual(expected, result);
             }
         }
@@ -205,6 +208,7 @@ namespace reactive_document_example
                     int writtenCount = 0;
 
                     document.Write(_source
+                        .Do((_) => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Send {_}"))
                         .Select(x =>
                             Observable.Empty<byte>()
                                 .Delay(TimeSpan.FromMilliseconds(10))
@@ -224,4 +228,4 @@ namespace reactive_document_example
             }
         }
     }
-}
+    }
