@@ -12,20 +12,20 @@ namespace reactive_document_example
 {
     public class Document : IDocument
     {
-        private static readonly EventLoopScheduler DocumentScheduler = new EventLoopScheduler();
+        private readonly EventLoopScheduler _documentScheduler = new EventLoopScheduler();
 
         private readonly Stream _stream;
         private readonly object _streamLock;
         private readonly bool _streamKeepAlive;
 
         private IDisposable _disposable;
-        private IObservable<byte> _source;
         private IObservable<byte> _writer;
 
         private int _writerIndex;
         private bool _disposed;
 
-        public Document(MemoryStream memoryStream, bool keepAlive = false)
+
+        public Document(Stream memoryStream, bool keepAlive = false)
         {
             _stream = memoryStream;
             _streamLock = new object();
@@ -52,21 +52,18 @@ namespace reactive_document_example
         /// document disposed
         /// or when document is disposed before writing completes</exception>
         /// <returns>Observable of written bytes that also produces an error if the document is disposed before writing completes</returns>
-        public IObservable<byte> Write(IObservable<byte> source)
+        public Task Write(IObservable<byte> source)
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(Document));
+
             if (_writer != null)
                 throw new InvalidOperationException("already writing to document");
 
-            _source = source
-                .ObserveOn(DocumentScheduler)
-                .SubscribeOn(DocumentScheduler)
-                .Publish();
-
             _writerIndex = (int) _stream.Length;
 
-            _writer = _source
+            var sourceWriter = source
+                .ObserveOn(_documentScheduler)
                 .Do(next =>
                 {
                     lock (_streamLock)
@@ -76,26 +73,18 @@ namespace reactive_document_example
                         _writerIndex += 1;
                     }
                 })
-                .Finally(() =>
-                {
-                    _source = null;
-                    _writer = null;
-                })
+                .Do(x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Written {x}"))
                 .Publish();
 
-            var awaitable = new Subject<byte>();
+            _writer = sourceWriter;
 
-            _disposable = new CompositeDisposable()
-            {
-                _writer.Subscribe(awaitable),
-                ((IConnectableObservable<byte>) _writer).Connect(),
-                ((IConnectableObservable<byte>) _source).Connect(),
-                Disposable.Create(() =>
-                {
-                    awaitable.OnError(new ObjectDisposedException(nameof(Document)));
-                    awaitable.Dispose();
-                })
-            };
+            var awaitable = _writer
+                .SubscribeOn(_documentScheduler)
+                .LastOrDefaultAsync()
+                .ToTask();
+
+            sourceWriter
+                .Connect();
 
             return awaitable;
         }
@@ -105,69 +94,93 @@ namespace reactive_document_example
             if (_disposed)
                 throw new ObjectDisposedException(nameof(Document));
 
-            var streamReader = Observable
-                .Create<byte>(
-                    observer =>
+            var streamReader =
+                Observable.Defer(() =>
+                {
+                    int length = 0;
+
+                    lock (_streamLock)
                     {
-                        var cts = new CancellationTokenSource();
-                        var disposable = ThreadPoolScheduler.Instance.Schedule(
-                            () =>
-                            {
-                                try
-                                {
-                                    var position = 0;
-                                    var length = _stream.Length;
-                                    var buffer = new byte[4096];
+                        length = (int) _stream.Length;
+                    }
 
-                                    do
-                                    {
-                                        cts.Token.ThrowIfCancellationRequested();
+                    Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Length at subscription is: {length}");
 
-                                        var count = Math.Min(4096, (int) (length - position));
-
-                                        lock (_streamLock)
-                                        {
-                                            _stream.Seek(position, SeekOrigin.Begin);
-                                            _stream.Read(buffer, 0, count);
-                                        }
-
-                                        for (int i = 0; i < count; i++)
-                                            observer.OnNext(buffer[i]);
-
-                                        position += count;
-                                    } while (position < length);
-
-                                    observer.OnCompleted();
-                                }
-                                catch (Exception error)
-                                {
-                                    observer.OnError(error);
-                                }
-                            });
-
-                        return new CompositeDisposable()
+                    return Observable.Create<byte>(
+                        observer =>
                         {
-                            Disposable.Create(() => cts.Dispose()),
-                            disposable
-                        };
-                    });
+                            var cts = new CancellationTokenSource();
+                            var disposable = ThreadPoolScheduler.Instance.Schedule(
+                                () =>
+                                {
+                                    Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Reader Started");
+                                  
+                                    try
+                                    {
+                                        var position = 0;
+                                        var buffer = new byte[4096];
+
+                                        do
+                                        {
+                                            cts.Token.ThrowIfCancellationRequested();
+
+                                            var count = Math.Min(4096, length - position);
+
+                                            lock (_streamLock)
+                                            {
+                                                _stream.Seek(position, SeekOrigin.Begin);
+                                                _stream.Read(buffer, 0, count);
+                                            }
+
+                                            for (int i = 0; i < count; i++)
+                                            {
+                                                observer.OnNext(buffer[i]);
+                                            }
+
+                                            position += count;
+                                        } while (position < length);
+
+                                        observer.OnCompleted();
+                                    }
+                                    catch (Exception error)
+                                    {
+                                        observer.OnError(error);
+                                    }
+                                    Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Reader Stopped");
+                                });
+
+                            return new CompositeDisposable()
+                            {
+                                Disposable.Create(() => cts.Dispose()),
+                                disposable
+                            };
+                        });
+                });
+
             return Observable.Create((IObserver<byte> observer) =>
             {
-                if (_source == null)
+                Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Creating Reader Observable");
+
+                if (_writer == null)
                     return streamReader.Subscribe(observer);
 
-                var bufferedSource = _source.BufferUntilSubscribed();
+                var bufferedSource = _writer.BufferUntilSubscribed();
                 var bufferedSourceDispose = bufferedSource.Connect();
+
+                Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Created Reader Observable");
 
                 var disposable = new CompositeDisposable()
                 {
-                    streamReader
-                        .Concat(bufferedSource)
-                        .Subscribe(observer),
+                    Observable.Concat(
+                        streamReader.Do(
+                            x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Read(stream) {x}")),
+                        bufferedSource.Do(
+                            x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Read(live) {x}"))
+                        ).Subscribe(observer),
                     bufferedSourceDispose
                 };
                 return disposable;
-            }).SubscribeOn(DocumentScheduler);
+            }).SubscribeOn(_documentScheduler);
         }
     }
 }

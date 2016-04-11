@@ -15,11 +15,11 @@ namespace reactive_document_example
     public interface IDocument : IDisposable
     {
         /// <summary>
-        /// Subscribes to the source and writes the stream to the document
+        /// Subscribes to the source and writes the byte stream to the document
         /// </summary>
         /// <param name="source">observable to subscribe to for data</param>
-        /// <returns>observable data that has succesfully been written</returns>
-        IObservable<byte> Write(IObservable<byte> source);
+        /// <returns>Task that completes when the last byte is written </returns>
+        Task Write(IObservable<byte> source);
 
         /// <summary>
         /// Reads the document and joins the current writer if there is one. 
