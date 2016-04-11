@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reactive.Concurrency;
 using System.Reactive.Subjects;
@@ -14,6 +15,22 @@ namespace System.Reactive.Linq
     /// </summary>
     public static class BufferUntilSubscribedExtentions
     {
+
+        public static IObservable<byte> WriteToStream(this IObservable<byte> source, Stream stream, object streamSync)
+        {
+            int streamWritePosition = 0;
+
+            return source.Do(next =>
+            {
+                lock (streamSync)
+                {
+                    stream.Seek(streamWritePosition, SeekOrigin.Begin);
+                    stream.WriteByte(next);
+                }
+            });
+        }
+
+
         /// <summary>
         /// Returns a connectable observable, that once connected, will start buffering data until the observer subscribes, at which time it will send all buffered data to the observer and then start sending new data.
         /// Thus the observer may subscribe late to a hot observable yet still see all of the data.  Later observers will not see the buffered events.
