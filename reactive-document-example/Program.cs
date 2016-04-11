@@ -9,6 +9,7 @@ using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using NUnit.Framework;
 
 namespace reactive_document_example
 {
@@ -18,19 +19,32 @@ namespace reactive_document_example
     {
         static void Main(string[] args)
         {
-            var source = Observable
-                .Range(0, 20)
-                .Select(x => (byte) x).Select(x => Observable.Empty<byte>()
-                    .Delay(TimeSpan.FromMilliseconds(100))
-                    .StartWith(x))
-                .Concat()
-                .Do(x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Source {x}"));
+            Task.Run(async () =>
+            {
+                var source = Observable.Range(0, 15).Select(x => (byte) x);
+                var expected = await source.ToArray();
 
-            var document = new Document(new MemoryStream());
+                using (var document = new Document(new MemoryStream(), true))
+                {
+                    var writeTask = document.Write(
+                        source
+                            .Select(x => Observable.Empty<byte>()
+                                .Delay(TimeSpan.FromMilliseconds(100))
+                                .StartWith(x))
+                            .Concat()
+                            .Do(x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Source {x}")));
 
-            document.Write(source);
+                    await Task.Delay(500);
 
-            document.Read().ToArray().ToTask().Wait();
+                    var result = await document.Read().ToArray();
+
+                    await writeTask;
+
+                    CollectionAssert.AreEqual(expected, result);
+
+                    Console.WriteLine("Read data equals expected data");
+                }
+            }).Wait();
         }
     }
 }

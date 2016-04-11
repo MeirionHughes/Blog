@@ -16,6 +16,8 @@ namespace reactive_document_example
 
         private readonly Stream _stream;
         private readonly object _streamLock;
+        private readonly object _documentLock;
+
         private readonly bool _streamKeepAlive;
 
         private IDisposable _disposable;
@@ -29,6 +31,7 @@ namespace reactive_document_example
         {
             _stream = memoryStream;
             _streamLock = new object();
+            _documentLock = new object();
             _streamKeepAlive = keepAlive;
         }
 
@@ -54,39 +57,52 @@ namespace reactive_document_example
         /// <returns>Observable of written bytes that also produces an error if the document is disposed before writing completes</returns>
         public Task Write(IObservable<byte> source)
         {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(Document));
+            lock (_documentLock)
+            {
+                if (_disposed)
+                    throw new ObjectDisposedException(nameof(Document));
 
-            if (_writer != null)
-                throw new InvalidOperationException("already writing to document");
+                if (_writer != null)
+                    throw new InvalidOperationException("already writing to document");
 
-            _writerIndex = (int) _stream.Length;
+                _writerIndex = (int) _stream.Length;
 
-            var sourceWriter = source
-                .ObserveOn(_documentScheduler)
-                .Do(next =>
-                {
-                    lock (_streamLock)
+                var sourceWriter = source
+                    .ObserveOn(_documentScheduler)
+                    .Do(next =>
                     {
-                        _stream.Seek(_writerIndex, SeekOrigin.Begin);
-                        _stream.WriteByte(next);
-                        _writerIndex += 1;
-                    }
-                })
-                .Do(x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Written {x}"))
-                .Publish();
+                        lock (_streamLock)
+                        {
+                            _stream.Seek(_writerIndex, SeekOrigin.Begin);
+                            _stream.WriteByte(next);
+                            _writerIndex += 1;
+                        }
+                    })
+                    .Do(x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Written {x}"))
+                    .Finally(() =>
+                    {
+                        lock (_documentLock)
+                        {
+                            _writer = null;
+                        }
+                    })
+                    .Publish();
 
-            _writer = sourceWriter;
+                _writer = sourceWriter;
 
-            var awaitable = _writer
-                .SubscribeOn(_documentScheduler)
-                .LastOrDefaultAsync()
-                .ToTask();
+                var subject = new Subject<byte>();
+                var cts = new CancellationTokenSource();
+                var awaitable = subject.LastOrDefaultAsync().ToTask(cts.Token);
 
-            sourceWriter
-                .Connect();
+                _disposable = new CompositeDisposable()
+                {
+                    Disposable.Create(() => cts.Cancel()),
+                    _writer.Subscribe(subject),
+                    sourceWriter.Connect(),
+                };
 
-            return awaitable;
+                return awaitable;
+            }
         }
 
         public IObservable<byte> Read()
@@ -114,7 +130,7 @@ namespace reactive_document_example
                                 () =>
                                 {
                                     Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Reader Started");
-                                  
+
                                     try
                                     {
                                         var position = 0;
@@ -134,6 +150,7 @@ namespace reactive_document_example
 
                                             for (int i = 0; i < count; i++)
                                             {
+                                                Task.Delay(100).Wait();
                                                 observer.OnNext(buffer[i]);
                                             }
 
@@ -162,7 +179,9 @@ namespace reactive_document_example
                 Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Creating Reader Observable");
 
                 if (_writer == null)
-                    return streamReader.Subscribe(observer);
+                    return streamReader.Do(
+                        x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Read(stream) {x}"))
+                        .Subscribe(observer);
 
                 var bufferedSource = _writer.BufferUntilSubscribed();
                 var bufferedSourceDispose = bufferedSource.Connect();
@@ -174,8 +193,7 @@ namespace reactive_document_example
                     Observable.Concat(
                         streamReader.Do(
                             x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Read(stream) {x}")),
-                        bufferedSource.Do(
-                            x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Read(live) {x}"))
+                        bufferedSource
                         ).Subscribe(observer),
                     bufferedSourceDispose
                 };

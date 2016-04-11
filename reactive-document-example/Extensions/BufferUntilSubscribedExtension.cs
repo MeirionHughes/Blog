@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reactive.Concurrency;
 using System.Reactive.Subjects;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 // ReSharper disable once CheckNamespace
@@ -86,7 +87,10 @@ namespace System.Reactive.Linq
 
                     var bufferedEvents = GetBuffers().Concat().Finally(RemoveBuffer);
                     // Finally clause to remove the buffer if the first observer stops listening.
-                    return _liveEvents.Merge(bufferedEvents).Subscribe(observer);
+                    return 
+                        Observable.Merge(
+                            _liveEvents.Do(x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Read(live) {x}")),
+                         bufferedEvents.Do(x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Read(live-buffered) {x}"))).Subscribe(observer);
                 }
             }
 

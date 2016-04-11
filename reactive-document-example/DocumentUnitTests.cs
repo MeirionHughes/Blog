@@ -13,7 +13,7 @@ namespace reactive_document_example
     [TestFixture]
     public class DocumentUnitTests
     {
-        private const int NumberCount = 100;
+        private const int NumberCount = 10;
 
         private IObservable<byte> _source;
 
@@ -188,51 +188,24 @@ namespace reactive_document_example
         {
             var expected = await _source.ToArray();
 
-            using (var backingStream = new MemoryStream())
-            using (var stream = Substitute.For<Stream>())
+
+            using (var document = new Document(new MemoryStream(), true))
             {
-                stream
-                    .When(x => x.WriteByte(Arg.Any<byte>()))
-                    .Do(x =>
-                    {
-                        backingStream.WriteByte(x.ArgAt<byte>(0));
-                    });
+                var writeTask = document.Write(
+                    _source
+                        .Select(x => Observable.Empty<byte>()
+                            .Delay(TimeSpan.FromMilliseconds(100))
+                            .StartWith(x))
+                        .Concat()
+                        .Do(x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Source {x}")));
 
-                stream.Read(Arg.Any<byte[]>(), Arg.Any<int>(), Arg.Any<int>())
-                    .Returns(x =>
-                    {
-                        Task.Delay(200).Wait();
-                        return backingStream.Read(x.ArgAt<byte[]>(0), x.ArgAt<int>(1), x.ArgAt<int>(2));
-                    });
+                await Task.Delay(500);
 
-                stream
-                    .When(x => x.Seek(Arg.Any<long>(), Arg.Any<SeekOrigin>()))
-                    .Do(x =>
-                    {
-                        backingStream.Seek(x.Arg<long>(), x.Arg<SeekOrigin>());
-                    });
+                var result = await document.Read().ToArray();
 
-                stream.Position.Returns(_ => backingStream.Position);
-                stream.Length.Returns(_ => backingStream.Length);
+                await writeTask;
 
-                using (var document = new Document(stream, true))
-                {
-                    var writeTask = document.Write(
-                        _source
-                            .Select(x => Observable.Empty<byte>()
-                                .Delay(TimeSpan.FromMilliseconds(100))
-                                .StartWith(x))
-                            .Concat()
-                            .Do(x => Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Source {x}")));
-
-                    await Task.Delay(500);
-
-                    var result = await document.Read().ToArray();
-
-                    await writeTask;
-
-                    CollectionAssert.AreEqual(expected, result);
-                }
+                CollectionAssert.AreEqual(expected, result);
             }
         }
     }
