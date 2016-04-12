@@ -30,7 +30,7 @@ namespace reactive_document_example
 
             document.Dispose();
 
-            //Assert.ThrowsAsync<ObjectDisposedException>(async () => { await document.Write(_source); });
+            Assert.ThrowsAsync<ObjectDisposedException>(async () => { await document.Write(_source); });
         }
 
         [Test]
@@ -49,11 +49,11 @@ namespace reactive_document_example
 
             document.Dispose();
 
-            //Assert.ThrowsAsync<ObjectDisposedException>(
-            //    async () =>
-            //    {
-            //        await document.Read().ToArray();
-            //    });
+            Assert.ThrowsAsync<ObjectDisposedException>(
+                async () =>
+                {
+                    await document.Read().ToArray();
+                });
         }
 
         [Test]
@@ -77,18 +77,17 @@ namespace reactive_document_example
         }
 
         [Test]
-        public async Task
-            given_document_when_writing_and_disposed_called_after_writing_complete_then_does_not_throw_exception()
+        public async Task given_document_when_writing_and_disposed_called_after_writing_complete_then_does_not_throw_exception()
         {
             using (var stream = new MemoryStream())
             {
-                //Assert.DoesNotThrowAsync(async () =>
-                //{
-                //    using (var document = new Document(stream, true))
-                //    {
-                //        await document.Write(_source);
-                //    }
-                //}//);
+                Assert.DoesNotThrowAsync(async () =>
+                {
+                    using (var document = new Document(stream, true))
+                    {
+                        await document.Write(_source);
+                    }
+                });
             }
         }
 
@@ -184,7 +183,7 @@ namespace reactive_document_example
 
         [Test]
         public async Task
-            given_document_and_writing_slow_data_and_stream_reading_is_slow_when_reading_data_then_result_is_correct()
+            given_document_when_writing_slow_data_and_stream_reading_is_slow_then_reading_data_returns_expected()
         {
             var expected = await _source.ToArray();
 

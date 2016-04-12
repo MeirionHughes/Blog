@@ -129,7 +129,7 @@ namespace reactive_document_example
                             var disposable = ThreadPoolScheduler.Instance.Schedule(
                                 () =>
                                 {
-                                    Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Reader Started");
+                                    Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Stream Reader Started");
 
                                     try
                                     {
@@ -150,7 +150,7 @@ namespace reactive_document_example
 
                                             for (int i = 0; i < count; i++)
                                             {
-                                                Task.Delay(100).Wait();
+                                                Task.Delay(50).Wait(); // Add some delay so we can see it reading concurrently with source
                                                 observer.OnNext(buffer[i]);
                                             }
 
@@ -163,7 +163,7 @@ namespace reactive_document_example
                                     {
                                         observer.OnError(error);
                                     }
-                                    Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Reader Stopped");
+                                    Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId:D2}] Stream Reader Stopped");
                                 });
 
                             return new CompositeDisposable()
@@ -198,7 +198,7 @@ namespace reactive_document_example
                     bufferedSourceDispose
                 };
                 return disposable;
-            }).SubscribeOn(_documentScheduler);
+            }).SubscribeOn(_documentScheduler); //important
         }
     }
 }
